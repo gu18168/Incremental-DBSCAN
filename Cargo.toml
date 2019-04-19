@@ -1,0 +1,16 @@
+[package]
+name = "inc_dbscan"
+version = "0.1.0"
+authors = ["gu18168 <gu18168@gmail.com>"]
+edition = "2018"
+
+[[bin]]
+name = "inc_dbscan"
+path = "src/main.rs"
+
+[dependencies]
+failure = "0.1.5"
+chrono = "0.4"
+csv = "1.0.5"
+rayon = "1.0.3"
+uuid = { version = "0.7.2", features = ["v4"] }

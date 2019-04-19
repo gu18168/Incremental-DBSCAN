@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+/rls*
+/output
+/data/2018*
+/.vscode
