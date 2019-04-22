@@ -2,6 +2,7 @@ use crate::models::{cluster::Cluster, point::Point};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::iter::FromIterator;
+use std::sync::mpsc::channel;
 
 static NOISE: i32 = -1;
 static BOUND: i32 = 0;
@@ -19,6 +20,7 @@ pub fn inc_dbscan(
 ) -> Vec<Cluster> {
     // 模拟当前所有的点
     let mut now_points: Vec<Point> = vec![];
+
     // 簇集合
     let mut clusters: Vec<Cluster> = vec![];
     // 噪音集合，第一个 usize 表示在所有点中的索引
@@ -30,10 +32,23 @@ pub fn inc_dbscan(
         println!("{} : {}", now_points.len(), sum_points);
 
         now_points.push(point.clone());
+        let round = now_points.len();
+
+        now_points = inc_nps(
+            now_points,
+            &point,
+            round,
+            eps,
+            max_spd,
+            max_dir,
+            is_stop_point,
+        );
+
         let (opt, infu_points) = inc_add(
             &now_points,
             &clusters,
             &point,
+            round,
             eps,
             min_pts,
             max_spd,
@@ -68,7 +83,8 @@ pub fn inc_dbscan(
                 let (cluster_opt, (mut infu_clusters, new_cluster_point_indexs)) = inc_cluster(
                     &now_points,
                     &clusters,
-                    new_cores,
+                    &new_cores,
+                    round,
                     eps,
                     min_pts,
                     max_spd,
@@ -133,6 +149,36 @@ pub fn inc_dbscan(
     clusters
 }
 
+/// 修改 point 邻居集内的点属性
+fn inc_nps(
+    points: Vec<Point>,
+    point: &Point,
+    round: usize,
+    eps: f64,
+    max_spd: f64,
+    max_dir: f64,
+    is_stop_point: bool,
+) -> Vec<Point> {
+    let (sender, receiver) = channel();
+    let mut points: Vec<Point> = points
+        .into_par_iter()
+        .map_with(sender, |s, p| {
+            if is_reachable(&p, point, eps, max_spd, max_dir, is_stop_point) {
+                s.send(1).unwrap();
+                return p.inc_nps(round);
+            }
+
+            p
+        })
+        .collect();
+
+    // point 必须也要正确设置，上面只会让 point nps 为 1
+    let n_len = receiver.iter().sum();
+    points[round - 1].set_nps(n_len);
+
+    points
+}
+
 /// 新建一个簇；合并到一个簇；几个簇合并
 /// 第一个参数暗示操作，第二个暗示操作涉及的簇索引集合和新簇含有的点索引集合
 /// 1. 只生成了一个新簇，第二个参数为该簇内的所有点索引
@@ -141,7 +187,8 @@ pub fn inc_dbscan(
 fn inc_cluster(
     points: &Vec<Point>,
     clusters: &Vec<Cluster>,
-    new_cores: Vec<&Point>,
+    new_cores: &Vec<&Point>,
+    round: usize,
     eps: f64,
     min_pts: usize,
     max_spd: f64,
@@ -162,22 +209,16 @@ fn inc_cluster(
         })
         .collect();
 
-    // 大邻居集内的核心点
+    // 选择旧核心点
     let upd_seed_ins: Vec<&&Point> = neighbours
         .par_iter()
         .filter_map(|(_, pt)| {
-            if new_cores.contains(&pt) {
-                return None;
+            // 如果该点是 point 邻居集内，旧核心点邻居集长度大于 min_pts
+            if pt.get_round() == round && pt.get_nps() > min_pts {
+                return Some(pt);
             }
-
-            let np: Vec<&Point> = points
-                .iter()
-                .filter(|p| is_reachable(p, pt, eps, max_spd, max_dir, is_stop_point))
-                .collect();
-
-            // 这里不能用 == min_pts 来区分是新旧核心点
-            // 因为可能有远方的核心点不在 point 邻居集内
-            if np.len() >= min_pts {
+            // 如果该点不在其邻居集内，长度大于等于 min_pts 即可
+            else if pt.get_round() < round && pt.get_nps() >= min_pts {
                 return Some(pt);
             }
 
@@ -185,7 +226,7 @@ fn inc_cluster(
         })
         .collect();
 
-    // 大邻居集内的旧核心点，利用 HashSet 去重
+    // 大邻居集内的旧核心点对应的簇索引，利用 HashSet 去重
     let cluster_indexs: HashSet<usize> = upd_seed_ins
         .into_par_iter()
         .filter_map(|p| {
@@ -223,6 +264,7 @@ fn inc_add(
     points: &Vec<Point>,
     clusters: &Vec<Cluster>,
     point: &Point,
+    round: usize,
     eps: f64,
     min_pts: usize,
     max_spd: f64,
@@ -232,7 +274,7 @@ fn inc_add(
     let neighbours: Vec<(usize, &Point)> = points
         .par_iter()
         .enumerate()
-        .filter(|(_, p)| is_reachable(p, point, eps, max_spd, max_dir, is_stop_point))
+        .filter(|(_, p)| p.get_round() == round)
         .collect();
     let n_len = neighbours.len();
 
@@ -244,15 +286,9 @@ fn inc_add(
                 return None;
             }
 
-            let np: Vec<&Point> = points
-                .iter()
-                .filter(|p| is_reachable(p, pt, eps, max_spd, max_dir, is_stop_point))
-                .collect();
-
-            // 新加上了 point 导致邻居集长度等于 min_pts 的点就是新生成的核心点
-            if np.len() == min_pts {
+            if pt.get_nps() == min_pts {
                 return Some((true, (index, pt)));
-            } else if np.len() > min_pts {
+            } else if pt.get_nps() > min_pts {
                 return Some((false, (index, pt)));
             }
 
@@ -294,6 +330,7 @@ fn inc_add(
     // 如果 point 周围出现了新的核心点
     else if new_len > 0 {
         // 将 new_cores 融合一次，减少未来时间度
+        // 这里基本不耗时间，新生成的核心点数量没有这么多
         let mut merge_cores: Vec<Vec<(usize, &Point)>> = Vec::new();
         for (index, core) in new_cores {
             let mut merge_indexs: Vec<usize> = merge_cores

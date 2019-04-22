@@ -8,6 +8,8 @@ pub struct Point {
     latitude: f64,
     sog: f64,
     cog: f64,
+    nps: usize,
+    round: usize
 }
 
 impl PartialEq for Point {
@@ -32,7 +34,19 @@ impl Point {
             latitude,
             sog,
             cog,
+            nps: 0,
+            round: 0
         }
+    }
+
+    pub fn inc_nps(mut self, round: usize) -> Self {
+        self.round = round;
+        self.nps += 1;
+        self
+    }
+
+    pub fn set_nps(&mut self, nps: usize) {
+        self.nps = nps;
     }
 
     pub fn get_uuid(&self) -> &Uuid {
@@ -53,5 +67,13 @@ impl Point {
 
     pub fn get_cog(&self) -> f64 {
         self.cog
+    }
+
+    pub fn get_nps(&self) -> usize {
+        self.nps
+    }
+
+    pub fn get_round(&self) -> usize {
+        self.round
     }
 }

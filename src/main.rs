@@ -5,6 +5,7 @@ use inc_dbscan::{
     inc_dbscan::inc_dbscan,
 };
 use std::env;
+use chrono::prelude::Local;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -17,7 +18,11 @@ fn main() {
         let is_stop_point: bool = args[7].parse().expect("isStopPoint isn't a Bool!");
 
         let points = read_csv_file(&args[1], is_stop_point).expect("read file error");
+
+        let start = Local::now();
         let clusters = inc_dbscan(points, eps, min_pts, max_spd, max_dir, is_stop_point);
+        let end = Local::now();
+        println!("inc dbscan for {}", end - start);
 
         write_csv_file(&args[2], clusters);
     } else {
